@@ -7,7 +7,7 @@ sns.set(style="whitegrid")
 pd.set_option('display.max_columns', None)
 
 # 1. Caricamento dati
-df = pd.read_excel("2025 - BEST Hackathon - dataset.xlsx")
+df = pd.read_excel("dataset.xlsx")
 
 # 2. Informazioni base
 print(">>> Informazioni sul dataset:")
