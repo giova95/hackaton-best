@@ -4,529 +4,456 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans, DBSCAN
-from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import time
 
-def prepare_data_for_clustering(df_enriched):
-    """
-    Prepara i dati per la clusterizzazione, selezionando e preprocessando le features.
-    
-    Args:
-        df_enriched: DataFrame arricchito
-        
-    Returns:
-        tuple: (DataFrame con features selezionate e preprocessate, nomi delle features)
-    """
-    # 1. Seleziona le features per la clusterizzazione
-    features = [
-        'POLICYHOLDER_AGE',
-        'CLAIM_AMOUNT_PAID',
-        'PREMIUM_AMOUNT_PAID',
-        'CUSTOMER_TENURE_YEARS',
-        'PREVIOUS_CLAIMS_COUNT',
-        'ACTIVE_POLICIES_COUNT',
-        'CUSTOMER_ANNUAL_PREMIUM',
-        'PROVINCE_AVG_INCOME',
-        'PROVINCE_ACCIDENT_RATE',
-        'VEHICLE_ESTIMATED_VALUE',
-        'VEHICLE_POWER_HP',
-        'VEHICLE_RISK_INDEX',
-        'CLAIM_FREQUENCY_RATIO',
-        'COMBINED_RISK_INDEX',
-        'CUSTOMER_VALUE_INDEX'
-    ]
-    
-    # 2. Crea una copia e gestisci valori nulli
-    df_features = df_enriched[features].copy()
-    
-    # Riempi eventuali valori nulli nelle features selezionate
-    for col in df_features.columns:
-        if df_features[col].isnull().sum() > 0:
-            df_features[col].fillna(df_features[col].median(), inplace=True)
-    
-    # 3. Standardizza le features
-    scaler = StandardScaler()
-    df_scaled = pd.DataFrame(
-        scaler.fit_transform(df_features),
-        columns=df_features.columns
-    )
-    
-    return df_scaled, features
+print("Script di clustering ottimizzato avviato...")
+print(f"Ora di inizio: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-def find_optimal_clusters(df_scaled, max_clusters=10):
-    """
-    Determina il numero ottimale di cluster usando il metodo dell'elbow e silhouette score.
+# Carica i dati
+print("\nCaricamento dataset da 'dataset_enriched.xlsx'...")
+start_load = time.time()
+df_enriched = pd.read_excel('dataset_enriched.xlsx')
+load_time = time.time() - start_load
+print(f"Dataset caricato in {load_time:.2f} secondi. Shape: {df_enriched.shape}")
+
+# OTTIMIZZAZIONE 1: Selezione di un sottoinsieme di dati se il dataset è grande
+print("\nValutazione dimensione dataset...")
+sample_size = 5000  # Dimensione massima del campione
+if len(df_enriched) > sample_size:
+    print(f"Dataset grande rilevato ({len(df_enriched)} righe). Campionamento di {sample_size} righe per analisi iniziale...")
+    df_sample = df_enriched.sample(n=sample_size, random_state=42)
+else:
+    print(f"Dataset di dimensioni gestibili ({len(df_enriched)} righe). Utilizzo dell'intero dataset.")
+    df_sample = df_enriched.copy()
+
+# OTTIMIZZAZIONE 2: Riduzione delle feature utilizzate
+print("\nPreparazione dati con feature essenziali...")
+start_time = time.time()
+
+# Selezione di feature ridotte ma rappresentative
+essential_features = [
+    'POLICYHOLDER_AGE',
+    'CLAIM_AMOUNT_PAID',
+    'PREMIUM_AMOUNT_PAID',
+    'CUSTOMER_TENURE_YEARS',
+    'VEHICLE_RISK_INDEX',
+    'CLAIM_FREQUENCY_RATIO',
+    'COMBINED_RISK_INDEX',
+    'CUSTOMER_VALUE_INDEX'
+]
+
+# Verifica quali feature sono effettivamente disponibili
+available_features = [f for f in essential_features if f in df_sample.columns]
+print(f"Utilizzando {len(available_features)}/{len(essential_features)} feature essenziali: {available_features}")
+
+# Prepara i dati
+df_features = df_sample[available_features].copy()
+
+# Gestione valori nulli veloce
+for col in df_features.columns:
+    null_count = df_features[col].isnull().sum()
+    if null_count > 0:
+        print(f"  - Riempiendo {null_count} valori nulli in {col}")
+        df_features[col].fillna(df_features[col].median(), inplace=True)
+
+# Standardizzazione
+scaler = StandardScaler()
+df_scaled = pd.DataFrame(
+    scaler.fit_transform(df_features),
+    columns=df_features.columns
+)
+
+print(f"Preparazione dati completata in {time.time() - start_time:.2f} secondi.")
+
+# OTTIMIZZAZIONE 3: Analisi rapida del numero ottimale di cluster
+print("\nRicerca rapida del numero ottimale di cluster...")
+start_time = time.time()
+
+# MODIFICA: Testare più valori per il numero di cluster
+n_clusters_to_test = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+results = {'n_clusters': [], 'inertia': [], 'silhouette': []}
+
+# MODIFICA: Implementazione parallela per K-means
+from joblib import Parallel, delayed
+
+def evaluate_kmeans(n, X):
+    print(f"  - Testando {n} cluster...")
+    # Parametri più rilassati per velocizzare
+    kmeans = KMeans(n_clusters=n, random_state=42, n_init=3, max_iter=100, tol=1e-3)
+    kmeans.fit(X)
     
-    Args:
-        df_scaled: DataFrame con features standardizzate
-        max_clusters: Numero massimo di cluster da testare
-        
-    Returns:
-        dict: Risultati delle metriche per ogni numero di cluster
-    """
-    results = {
-        'n_clusters': [],
-        'inertia': [],
-        'silhouette': []
+    labels = kmeans.labels_
+    inertia = kmeans.inertia_
+    silhouette = silhouette_score(X, labels)
+    print(f"    * Silhouette score: {silhouette:.4f}")
+    return n, inertia, silhouette
+
+# Esegui in parallelo con un numero adeguato di jobs
+n_jobs = min(4, len(n_clusters_to_test))  # Limita a max 4 processi paralleli
+cluster_results = Parallel(n_jobs=n_jobs)(
+    delayed(evaluate_kmeans)(n, df_scaled) for n in n_clusters_to_test
+)
+
+# Elabora i risultati
+for n, inertia, silhouette in cluster_results:
+    results['n_clusters'].append(n)
+    results['inertia'].append(inertia)
+    results['silhouette'].append(silhouette)
+
+print(f"Ricerca completata in {time.time() - start_time:.2f} secondi.")
+
+# MODIFICA: Selezione più sofisticata del numero di cluster
+# Trova il miglior silhouette score
+best_silhouette_idx = np.argmax(results['silhouette'])
+best_n_clusters_silhouette = results['n_clusters'][best_silhouette_idx]
+best_silhouette = results['silhouette'][best_silhouette_idx]
+
+# Trova il punto di "gomito" dell'inertia (metodo del gomito)
+from kneed import KneeLocator
+if len(results['n_clusters']) >= 4:  # Almeno 4 punti per trovare il gomito
+    try:
+        kneedle = KneeLocator(
+            results['n_clusters'], 
+            results['inertia'],
+            curve='convex', 
+            direction='decreasing'
+        )
+        elbow_point = kneedle.elbow
+        print(f"Punto di gomito nell'inertia: {elbow_point}")
+    except:
+        elbow_point = None
+else:
+    elbow_point = None
+
+# Scegli il numero di cluster in base a entrambi i criteri
+if elbow_point and results['silhouette'][results['n_clusters'].index(elbow_point)] > 0.7 * best_silhouette:
+    best_n_clusters = elbow_point
+    print(f"\nNumero di cluster selezionato dal metodo del gomito: {best_n_clusters}")
+    print(f"Silhouette: {results['silhouette'][results['n_clusters'].index(elbow_point)]:.4f}")
+else:
+    best_n_clusters = best_n_clusters_silhouette
+    print(f"\nMiglior numero di cluster selezionato dal silhouette score: {best_n_clusters} (silhouette: {best_silhouette:.4f})")
+
+# Visualizzazione rapida dei risultati
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(results['n_clusters'], results['inertia'], 'o-')
+plt.title('Metodo del Gomito')
+plt.xlabel('Numero di Cluster')
+plt.ylabel('Inertia')
+if elbow_point:
+    plt.axvline(x=elbow_point, color='r', linestyle='--')
+
+plt.subplot(1, 2, 2)
+plt.plot(results['n_clusters'], results['silhouette'], 'o-')
+plt.title('Silhouette Score')
+plt.xlabel('Numero di Cluster')
+plt.ylabel('Silhouette Score')
+plt.axvline(x=best_n_clusters_silhouette, color='g', linestyle='--')
+plt.tight_layout()
+plt.savefig('cluster_selection.png')
+print("Grafico di selezione dei cluster salvato in 'cluster_selection.png'")
+
+# OTTIMIZZAZIONE 4: Esecuzione K-means rapida con parametri di convergenza più rilassati
+print(f"\nEseguendo K-means veloce con {best_n_clusters} cluster...")
+start_time = time.time()
+
+# MODIFICA: Equilibrio tra velocità e precisione
+kmeans = KMeans(
+    n_clusters=best_n_clusters, 
+    random_state=42, 
+    n_init=5,  # Aumentato leggermente per migliore stabilità con più cluster
+    max_iter=150,  # Aumentato per consentire una migliore convergenza con più cluster
+    tol=1e-3,  # Tolleranza più elevata per convergenza più rapida
+    algorithm='elkan'  # Generalmente più veloce per dataset di piccole/medie dimensioni
+)
+cluster_labels = kmeans.fit_predict(df_scaled)
+
+# Distribuzione dei cluster
+counts = np.bincount(cluster_labels)
+for i, count in enumerate(counts):
+    print(f"  - Cluster {i}: {count} elementi ({count/len(cluster_labels)*100:.1f}%)")
+
+print(f"Clustering completato in {time.time() - start_time:.2f} secondi.")
+
+# OTTIMIZZAZIONE 5: PCA semplificata
+print("\nApplicazione PCA veloce per visualizzazione...")
+start_time = time.time()
+
+pca = PCA(n_components=2)
+principal_components = pca.fit_transform(df_scaled)
+
+pca_df = pd.DataFrame(
+    data=principal_components,
+    columns=['PC1', 'PC2']
+)
+pca_df['Cluster'] = cluster_labels
+
+# Stampa la varianza spiegata
+var_explained = pca.explained_variance_ratio_
+print(f"  - Varianza spiegata: PC1={var_explained[0]:.2%}, PC2={var_explained[1]:.2%}")
+print(f"  - Varianza totale spiegata: {sum(var_explained):.2%}")
+
+print(f"PCA completata in {time.time() - start_time:.2f} secondi.")
+
+# MODIFICA: Visualizzazione migliorata dei cluster
+plt.figure(figsize=(12, 10))
+scatter = plt.scatter(
+    pca_df['PC1'], 
+    pca_df['PC2'], 
+    c=pca_df['Cluster'], 
+    cmap='tab10', 
+    alpha=0.7, 
+    s=30
+)
+plt.title(f'Visualizzazione Cluster (PCA) - {best_n_clusters} cluster')
+plt.xlabel(f'PC1 ({var_explained[0]:.2%})')
+plt.ylabel(f'PC2 ({var_explained[1]:.2%})')
+plt.colorbar(scatter, label='Cluster')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.savefig('cluster_visualization.png', dpi=300)
+print("Visualizzazione dei cluster salvata in 'cluster_visualization.png'")
+
+# OTTIMIZZAZIONE 6: Analisi semplificata delle caratteristiche dei cluster
+print("\nCalcolo statistiche essenziali per cluster...")
+start_time = time.time()
+
+# Aggiungi le etichette al dataset originale
+df_with_clusters = df_sample.copy()
+df_with_clusters['CLUSTER'] = cluster_labels
+
+# MODIFICA: Ampliato il set di metriche analizzate
+key_metrics = ['POLICYHOLDER_AGE', 'COMBINED_RISK_INDEX', 'CUSTOMER_VALUE_INDEX', 
+               'CLAIM_AMOUNT_PAID', 'PREMIUM_AMOUNT_PAID', 'CUSTOMER_TENURE_YEARS']
+available_metrics = [m for m in key_metrics if m in df_with_clusters.columns]
+
+# Calcola statistiche per ogni cluster
+if available_metrics:
+    cluster_stats = df_with_clusters.groupby('CLUSTER')[available_metrics].agg(['mean', 'median', 'std', 'min', 'max'])
+    print("\nStatistiche dei cluster:")
+    print(cluster_stats)
+else:
+    print("Nessuna metrica disponibile per l'analisi dei cluster.")
+
+print(f"Analisi cluster completata in {time.time() - start_time:.2f} secondi.")
+
+# OTTIMIZZAZIONE 7: Generazione rapida delle strategie di marketing
+print("\nGenerazione rapida delle strategie di marketing...")
+start_time = time.time()
+
+# Creare strategie semplici basate sui cluster
+marketing_strategies = []
+
+for cluster_id in range(best_n_clusters):
+    cluster_df = df_with_clusters[df_with_clusters['CLUSTER'] == cluster_id]
+    
+    # Calcola caratteristiche chiave
+    profile = {}
+    for metric in available_metrics:
+        profile[metric] = cluster_df[metric].mean()
+    
+    # Determina il tipo di cluster in base ai valori
+    strategy = {
+        'Cluster': f'Cluster {cluster_id}',
+        'Size': len(cluster_df),
+        'Percentage': f"{len(cluster_df) / len(df_with_clusters) * 100:.1f}%",
+        'Profile': '',
+        'Marketing_Strategy': '',
+        'Product_Recommendations': '',
+        'Communication_Channel': ''
     }
     
-    for n in range(2, max_clusters + 1):
-        kmeans = KMeans(n_clusters=n, random_state=42, n_init=10)
-        kmeans.fit(df_scaled)
-        
-        # Salva i risultati
-        results['n_clusters'].append(n)
-        results['inertia'].append(kmeans.inertia_)
-        results['silhouette'].append(silhouette_score(df_scaled, kmeans.labels_))
-    
-    return results
-
-def visualize_cluster_metrics(results):
-    """
-    Visualizza le metriche dei cluster per determinare il numero ottimale.
-    
-    Args:
-        results: Dizionario con i risultati delle metriche
-    """
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-    
-    # Plot dell'inerzia (elbow method)
-    color = 'tab:blue'
-    ax1.set_xlabel('Numero di Cluster')
-    ax1.set_ylabel('Inerzia', color=color)
-    ax1.plot(results['n_clusters'], results['inertia'], 'o-', color=color)
-    ax1.tick_params(axis='y', labelcolor=color)
-    
-    # Plot del silhouette score
-    ax2 = ax1.twinx()
-    color = 'tab:red'
-    ax2.set_ylabel('Silhouette Score', color=color)
-    ax2.plot(results['n_clusters'], results['silhouette'], 'o-', color=color)
-    ax2.tick_params(axis='y', labelcolor=color)
-    
-    plt.title('Metodo dell\'Elbow e Silhouette Score per K-Means')
-    plt.tight_layout()
-    return fig
-
-def perform_clustering(df_scaled, n_clusters=4):
-    """
-    Esegue la clusterizzazione K-Means con il numero ottimale di cluster.
-    
-    Args:
-        df_scaled: DataFrame con features standardizzate
-        n_clusters: Numero di cluster da utilizzare
-        
-    Returns:
-        tuple: (labels dei cluster, modello K-Means)
-    """
-    # Applica K-Means con il numero ottimale di cluster
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    cluster_labels = kmeans.fit_predict(df_scaled)
-    
-    return cluster_labels, kmeans
-
-def apply_pca_for_visualization(df_scaled, n_components=2):
-    """
-    Applica PCA per ridurre le dimensioni e visualizzare i cluster.
-    
-    Args:
-        df_scaled: DataFrame con features standardizzate
-        n_components: Numero di componenti principali
-        
-    Returns:
-        tuple: (DataFrame con le componenti principali, modello PCA)
-    """
-    pca = PCA(n_components=n_components)
-    principal_components = pca.fit_transform(df_scaled)
-    
-    # Crea un DataFrame con le componenti principali
-    pca_df = pd.DataFrame(
-        data=principal_components,
-        columns=[f'PC{i+1}' for i in range(n_components)]
-    )
-    
-    return pca_df, pca
-
-def visualize_clusters_2d(pca_df, cluster_labels, features, pca):
-    """
-    Visualizza i cluster in 2D usando le componenti principali.
-    
-    Args:
-        pca_df: DataFrame con le componenti principali
-        cluster_labels: Etichette dei cluster
-        features: Nomi delle features originali
-        pca: Modello PCA
-    """
-    # Aggiungi le etichette dei cluster al DataFrame PCA
-    pca_df['Cluster'] = cluster_labels
-    
-    # Converti in categorie per legenda
-    pca_df['Cluster'] = pca_df['Cluster'].astype('category')
-    
-    # Crea un grafico scatter con Plotly
-    fig = px.scatter(
-        pca_df, x='PC1', y='PC2',
-        color='Cluster',
-        title='Visualizzazione 2D dei Cluster con PCA',
-        color_continuous_scale=px.colors.qualitative.G10,
-        width=800, height=600
-    )
-    
-    # Aggiungi informazioni sulle componenti principali
-    loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
-    
-    # Aggiungi frecce per rappresentare le feature loadings
-    for i, feature in enumerate(features):
-        fig.add_shape(
-            type='line',
-            x0=0, y0=0,
-            x1=loadings[i, 0],
-            y1=loadings[i, 1],
-            line=dict(color='black', width=1, dash='dot'),
-            name=feature
-        )
-        
-        # Aggiungi etichette per le feature
-        fig.add_annotation(
-            x=loadings[i, 0] * 1.1,
-            y=loadings[i, 1] * 1.1,
-            ax=0, ay=0,
-            xanchor="center",
-            yanchor="bottom",
-            text=feature,
-            arrowhead=0,
-            font=dict(size=10, color='darkblue')
-        )
-    
-    # Aggiungi titoli degli assi con la varianza spiegata
-    fig.update_layout(
-        xaxis_title=f"PC1 ({pca.explained_variance_ratio_[0]:.2%} varianza spiegata)",
-        yaxis_title=f"PC2 ({pca.explained_variance_ratio_[1]:.2%} varianza spiegata)",
-        legend_title="Cluster"
-    )
-    
-    return fig
-
-def analyze_clusters(df_enriched, cluster_labels, features):
-    """
-    Analizza le caratteristiche di ciascun cluster.
-    
-    Args:
-        df_enriched: DataFrame originale arricchito
-        cluster_labels: Etichette dei cluster
-        features: Lista delle features utilizzate per la clusterizzazione
-        
-    Returns:
-        DataFrame: Statistiche descrittive per ogni cluster
-    """
-    # Aggiungi le etichette dei cluster al DataFrame originale
-    df_with_clusters = df_enriched.copy()
-    df_with_clusters['CLUSTER'] = cluster_labels
-    
-    # Calcola le statistiche per ogni cluster
-    cluster_stats = []
-    
-    for cluster_id in range(len(set(cluster_labels))):
-        # Ottieni sottoinsiemi per cluster
-        cluster_df = df_with_clusters[df_with_clusters['CLUSTER'] == cluster_id]
-        
-        # Calcola statistiche per le features numeriche
-        stats = {}
-        stats['Cluster'] = f'Cluster {cluster_id}'
-        stats['Size'] = len(cluster_df)
-        stats['Size_Pct'] = len(cluster_df) / len(df_with_clusters) * 100
-        
-        # Calcola media per ogni feature
-        for feature in features:
-            stats[f'{feature}_mean'] = cluster_df[feature].mean()
-        
-        # Calcola mediana per alcune feature importanti
-        for feature in ['POLICYHOLDER_AGE', 'CUSTOMER_VALUE_INDEX', 'COMBINED_RISK_INDEX']:
-            stats[f'{feature}_median'] = cluster_df[feature].median()
-        
-        # Aggiungi statistiche sulle feature categoriche
-        for cat_col in ['POLICYHOLDER_GENDER', 'WARRANTY', 'ACQUISITION_CHANNEL']:
-            if cat_col in df_with_clusters.columns:
-                # Top 3 valori
-                top3 = cluster_df[cat_col].value_counts(normalize=True).nlargest(3)
-                for i, (val, pct) in enumerate(top3.items()):
-                    stats[f'{cat_col}_top{i+1}'] = val
-                    stats[f'{cat_col}_top{i+1}_pct'] = pct * 100
-        
-        cluster_stats.append(stats)
-    
-    # Converti in DataFrame
-    cluster_stats_df = pd.DataFrame(cluster_stats)
-    
-    return cluster_stats_df
-
-def visualize_cluster_profiles(df_with_clusters, features, n_clusters):
-    """
-    Visualizza i profili dei cluster per le principali features.
-    
-    Args:
-        df_with_clusters: DataFrame con le etichette dei cluster
-        features: Lista delle features da visualizzare
-        n_clusters: Numero di cluster
-    """
-    # Seleziona le feature più significative da visualizzare
-    key_features = [
-        'POLICYHOLDER_AGE', 
-        'CUSTOMER_VALUE_INDEX', 
-        'COMBINED_RISK_INDEX',
-        'CLAIM_FREQUENCY_RATIO',
-        'VEHICLE_RISK_INDEX',
-        'CUSTOMER_ANNUAL_PREMIUM'
-    ]
-    
-    # Calcola valori medi per ogni feature in ogni cluster
-    cluster_means = df_with_clusters.groupby('CLUSTER')[key_features].mean()
-    
-    # Standardizza i valori per la visualizzazione radar
-    scaler = StandardScaler()
-    cluster_means_scaled = pd.DataFrame(
-        scaler.fit_transform(cluster_means),
-        columns=cluster_means.columns,
-        index=cluster_means.index
-    )
-    
-    # Crea un grafico radar per ogni cluster
-    fig = make_subplots(
-        rows=2, cols=2, 
-        specs=[[{'type': 'polar'}, {'type': 'polar'}], [{'type': 'polar'}, {'type': 'polar'}]],
-        subplot_titles=[f'Cluster {i}' for i in range(n_clusters)]
-    )
-    
-    # Aggiunge i dati per ogni cluster
-    for i in range(n_clusters):
-        row, col = i // 2 + 1, i % 2 + 1
-        
-        # Prepara i dati per il grafico radar
-        cluster_data = cluster_means_scaled.iloc[i].tolist()
-        # Chiudi il cerchio ripetendo il primo valore
-        cluster_data.append(cluster_data[0])
-        
-        feature_names = list(key_features)
-        # Chiudi il cerchio ripetendo il primo nome
-        feature_names.append(feature_names[0])
-        
-        # Aggiungi il grafico radar
-        fig.add_trace(
-            go.Scatterpolar(
-                r=cluster_data,
-                theta=feature_names,
-                fill='toself',
-                name=f'Cluster {i}'
-            ),
-            row=row, col=col
-        )
-    
-    # Aggiorna il layout
-    fig.update_layout(
-        height=800,
-        width=1000,
-        title_text="Profili dei Cluster per le Principali Caratteristiche",
-        showlegend=False
-    )
-    
-    return fig
-
-def create_marketing_strategy(cluster_stats_df, df_with_clusters):
-    """
-    Definisce strategie di marketing personalizzate per ciascun cluster.
-    
-    Args:
-        cluster_stats_df: DataFrame con le statistiche dei cluster
-        df_with_clusters: DataFrame con le etichette dei cluster
-        
-    Returns:
-        DataFrame: Strategie di marketing per ogni cluster
-    """
-    strategies = []
-    
-    for i, row in cluster_stats_df.iterrows():
-        cluster_id = i
-        cluster_size = row['Size']
-        cluster_pct = row['Size_Pct']
-        
-        strategy = {
-            'Cluster': f'Cluster {cluster_id}',
-            'Size': cluster_size,
-            'Percentage': f"{cluster_pct:.1f}%",
-            'Profile': '',
-            'Risk_Level': '',
-            'Value_Level': '',
-            'Marketing_Strategy': '',
-            'Product_Recommendations': '',
-            'Communication_Channel': '',
-            'Pricing_Strategy': '',
-            'Retention_Strategy': ''
-        }
-        
-        # Determina il profilo del cluster in base alle caratteristiche
-        age_mean = row['POLICYHOLDER_AGE_mean']
-        value_index = row['CUSTOMER_VALUE_INDEX_mean']
-        risk_index = row['COMBINED_RISK_INDEX_mean']
-        tenure = row['CUSTOMER_TENURE_YEARS_mean']
-        policies = row['ACTIVE_POLICIES_COUNT_mean']
-        claim_freq = row['CLAIM_FREQUENCY_RATIO_mean']
-        
-        # Profilo demografico
-        if age_mean < 35:
+    # Logica per la caratterizzazione
+    if 'POLICYHOLDER_AGE' in profile:
+        age = profile['POLICYHOLDER_AGE']
+        if age < 30:
+            age_profile = "molto giovani"
+        elif age < 40:
             age_profile = "giovani"
-        elif age_mean < 55:
+        elif age < 55:
             age_profile = "adulti"
-        elif age_mean < 70:
+        elif age < 70:
             age_profile = "senior"
         else:
             age_profile = "anziani"
+    else:
+        age_profile = "vari"
         
-        # Livello di rischio
-        if risk_index < 0.4:
-            strategy['Risk_Level'] = "Basso"
-            risk_profile = "a basso rischio"
-        elif risk_index < 0.7:
-            strategy['Risk_Level'] = "Medio"
-            risk_profile = "a rischio medio"
+    if 'COMBINED_RISK_INDEX' in profile:
+        risk = profile['COMBINED_RISK_INDEX']
+        if risk < 0.3:
+            risk_profile = "bassissimo rischio"
+        elif risk < 0.5:
+            risk_profile = "basso rischio"
+        elif risk < 0.7:
+            risk_profile = "medio rischio"
+        elif risk < 0.85:
+            risk_profile = "alto rischio"
         else:
-            strategy['Risk_Level'] = "Alto"
-            risk_profile = "ad alto rischio"
+            risk_profile = "altissimo rischio"
+    else:
+        risk_profile = "rischio vario"
         
-        # Livello di valore
-        if value_index < 5:
-            strategy['Value_Level'] = "Basso"
-            value_profile = "a basso valore"
-        elif value_index < 15:
-            strategy['Value_Level'] = "Medio"
-            value_profile = "a valore medio"
+    if 'CUSTOMER_VALUE_INDEX' in profile:
+        value = profile['CUSTOMER_VALUE_INDEX']
+        if value < 5:
+            value_profile = "basso valore"
+        elif value < 10:
+            value_profile = "medio-basso valore"
+        elif value < 15:
+            value_profile = "medio valore"
+        elif value < 20:
+            value_profile = "medio-alto valore"
         else:
-            strategy['Value_Level'] = "Alto"
-            value_profile = "ad alto valore"
-        
-        # Fedeltà cliente
-        if tenure < 3:
-            loyalty_profile = "nuovi"
+            value_profile = "alto valore"
+    else:
+        value_profile = "valore vario"
+    
+    # MODIFICA: Aggiungi informazioni su fedeltà/retention
+    if 'CUSTOMER_TENURE_YEARS' in profile:
+        tenure = profile['CUSTOMER_TENURE_YEARS']
+        if tenure < 1:
+            tenure_profile = "nuovi clienti"
+        elif tenure < 3:
+            tenure_profile = "clienti recenti"
         elif tenure < 7:
-            loyalty_profile = "consolidati"
+            tenure_profile = "clienti consolidati" 
         else:
-            loyalty_profile = "fedeli di lunga data"
-        
-        # Combina le caratteristiche per creare un profilo
-        strategy['Profile'] = f"Clienti {age_profile} {risk_profile} {value_profile}, {loyalty_profile}"
-        
-        # Definisci strategie in base al profilo
-        
-        # 1. CLUSTER A BASSO RISCHIO, ALTO VALORE
-        if risk_index < 0.4 and value_index > 15:
-            strategy['Marketing_Strategy'] = "Programma di fidelizzazione premium e cross-selling"
-            strategy['Product_Recommendations'] = "Garanzie aggiuntive premium, assicurazioni casa/salute/viaggi"
-            strategy['Communication_Channel'] = "Comunicazione personalizzata, contatto diretto dell'agente"
-            strategy['Pricing_Strategy'] = "Prezzi premium con sconti di fedeltà, sconti multi-polizza"
-            strategy['Retention_Strategy'] = "Servizi esclusivi, assistenza dedicata 24/7, inviti ad eventi"
-        
-        # 2. CLUSTER AD ALTO RISCHIO, ALTO VALORE
-        elif risk_index >= 0.7 and value_index > 15:
-            strategy['Marketing_Strategy'] = "Programma di prevenzione e riduzione rischi con incentivi"
-            strategy['Product_Recommendations'] = "Protezioni aggiuntive, servizi di monitoraggio e assistenza"
-            strategy['Communication_Channel'] = "App dedicata con notifiche, contatto proattivo"
-            strategy['Pricing_Strategy'] = "Prezzi premium con sconti basati su comportamenti virtuosi"
-            strategy['Retention_Strategy'] = "Programma punti per comportamenti sicuri, assistenza prioritaria"
-        
-        # 3. CLUSTER A BASSO RISCHIO, BASSO VALORE
-        elif risk_index < 0.4 and value_index < 5:
-            strategy['Marketing_Strategy'] = "Crescita del valore cliente con cross-selling mirato"
-            strategy['Product_Recommendations'] = "Pacchetti base con opportunità di upgrade"
-            strategy['Communication_Channel'] = "Email, SMS, app self-service"
-            strategy['Pricing_Strategy'] = "Prezzi competitivi con incentivi per polizze aggiuntive"
-            strategy['Retention_Strategy'] = "Rinnovi automatici con sconti incrementali, processi digitalizzati"
-        
-        # 4. CLUSTER AD ALTO RISCHIO, BASSO VALORE
-        elif risk_index >= 0.7 and value_index < 5:
-            strategy['Marketing_Strategy'] = "Ritenzione selettiva con mitigazione rischi"
-            strategy['Product_Recommendations'] = "Prodotti base con franchigie elevate, servizi di assistenza"
-            strategy['Communication_Channel'] = "Comunicazione educativa, formazione sulla prevenzione"
-            strategy['Pricing_Strategy'] = "Pricing dinamico basato sul rischio, incentivi per comportamenti virtuosi"
-            strategy['Retention_Strategy'] = "Rivalutazione periodica del profilo di rischio, programmi educativi"
-        
-        # 5. CLIENTI GIOVANI (STRATEGIE SPECIFICHE)
-        elif age_mean < 35:
-            strategy['Marketing_Strategy'] = "Acquisizione digitale e costruzione relazione"
-            strategy['Product_Recommendations'] = "Prodotti entry-level, assicurazioni pay-per-use, garanzie su misura"
-            strategy['Communication_Channel'] = "Social media, app mobile, messaggistica istantanea"
-            strategy['Pricing_Strategy'] = "Prezzi competitivi, piani rateizzati, sconti per comportamenti virtuosi"
-            strategy['Retention_Strategy'] = "Programma loyalty digitale, gamification, community online"
-        
-        # 6. CLIENTI SENIOR (STRATEGIE SPECIFICHE)
-        elif age_mean >= 65:
-            strategy['Marketing_Strategy'] = "Approccio tradizionale, servizi premium di assistenza"
-            strategy['Product_Recommendations'] = "Pacchetti completi, assistenza medica, tutela patrimonio"
-            strategy['Communication_Channel'] = "Consulenti dedicati, materiale cartaceo, call center dedicato"
-            strategy['Pricing_Strategy'] = "Prezzi tutto-incluso, facilità di pagamento, tariffe stabili"
-            strategy['Retention_Strategy'] = "Contatto periodico personale, eventi dedicati, servizi aggiuntivi gratuiti"
-        
-        # FALLBACK PER ALTRI CLUSTER
-        else:
-            strategy['Marketing_Strategy'] = "Approccio bilanciato di cross-selling e up-selling"
-            strategy['Product_Recommendations'] = "Mix di prodotti base e premium in base al profilo"
-            strategy['Communication_Channel'] = "Mix di canali digitali e tradizionali"
-            strategy['Pricing_Strategy'] = "Prezzi competitivi con personalizzazioni"
-            strategy['Retention_Strategy'] = "Programma loyalty standard, comunicazioni periodiche"
-        
-        strategies.append(strategy)
+            tenure_profile = "clienti di lunga data"
+    else:
+        tenure_profile = ""
     
-    return pd.DataFrame(strategies)
+    # Imposta il profilo
+    if tenure_profile:
+        strategy['Profile'] = f"Clienti {age_profile}, {risk_profile}, {value_profile}, {tenure_profile}"
+    else:
+        strategy['Profile'] = f"Clienti {age_profile}, {risk_profile}, {value_profile}"
+    
+    # MODIFICA: Strategia più granulare basata sui profili identificati
+    # Matrice di decisione semplificata
+    if "basso rischio" in risk_profile and "alto valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Premium loyalty program"
+        strategy['Product_Recommendations'] = "Premium add-ons, family protection plan"
+        strategy['Communication_Channel'] = "Personalized, app, direct contact"
+    elif "medio rischio" in risk_profile and "alto valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Value protection + premium services"
+        strategy['Product_Recommendations'] = "Extended coverage, concierge service"
+        strategy['Communication_Channel'] = "App notifications, email, phone"
+    elif "alto rischio" in risk_profile and "alto valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Risk prevention + premium retention"
+        strategy['Product_Recommendations'] = "Additional protection, smart devices"
+        strategy['Communication_Channel'] = "Direct contact, personalized app"
+    elif "basso rischio" in risk_profile and "medio valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Value enhancement"
+        strategy['Product_Recommendations'] = "Mid-tier products, bundle offers"
+        strategy['Communication_Channel'] = "Email, app notifications"
+    elif "medio rischio" in risk_profile and "medio valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Balanced service improvement"
+        strategy['Product_Recommendations'] = "Customized packages"
+        strategy['Communication_Channel'] = "Email, SMS, app"
+    elif "alto rischio" in risk_profile and "medio valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Risk management education"
+        strategy['Product_Recommendations'] = "Protection bundles, monitoring"
+        strategy['Communication_Channel'] = "Educational content, email"
+    elif "basso rischio" in risk_profile and "basso valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Cross-selling focus"
+        strategy['Product_Recommendations'] = "Basic packages, complementary products"
+        strategy['Communication_Channel'] = "Email, SMS, social media"
+    elif "medio rischio" in risk_profile and "basso valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Risk-aware value growth"
+        strategy['Product_Recommendations'] = "Basic protection, starter packages"
+        strategy['Communication_Channel'] = "Email, educational content"
+    elif "alto rischio" in risk_profile and "basso valore" in value_profile:
+        strategy['Marketing_Strategy'] = "Essential risk education"
+        strategy['Product_Recommendations'] = "Basic protection, discounts for safe behavior"
+        strategy['Communication_Channel'] = "Educational content, social media"
+    else:
+        strategy['Marketing_Strategy'] = "Balanced approach"
+        strategy['Product_Recommendations'] = "Mixed products"
+        strategy['Communication_Channel'] = "Multi-channel"
+    
+    marketing_strategies.append(strategy)
 
-# Funzione principale per eseguire l'intero flusso di clusterizzazione
-def run_customer_clustering_pipeline(df_enriched):
-    """
-    Esegue l'intero flusso di clusterizzazione e generazione di strategie.
-    
-    Args:
-        df_enriched: DataFrame arricchito
-        
-    Returns:
-        tuple: (DataFrame con cluster, statistiche dei cluster, strategie di marketing)
-    """
-    # 1. Prepara i dati
-    df_scaled, features = prepare_data_for_clustering(df_enriched)
-    
-    # 2. Trova il numero ottimale di cluster
-    clustering_metrics = find_optimal_clusters(df_scaled)
-    visualize_cluster_metrics(clustering_metrics)
-    
-    # 3. Seleziona il numero di cluster (in base alle metriche)
-    # Per questo esempio usiamo 4 cluster
-    n_clusters = 4
-    
-    # 4. Esegui la clusterizzazione
-    cluster_labels, kmeans_model = perform_clustering(df_scaled, n_clusters)
-    
-    # 5. Applica PCA per visualizzazione
-    pca_df, pca_model = apply_pca_for_visualization(df_scaled)
-    
-    # 6. Visualizza i cluster
-    cluster_viz = visualize_clusters_2d(pca_df, cluster_labels, features, pca_model)
-    
-    # 7. Aggiungi etichette cluster al dataset originale
-    df_with_clusters = df_enriched.copy()
-    df_with_clusters['CLUSTER'] = cluster_labels
-    
-    # 8. Analizza i cluster
-    cluster_stats = analyze_clusters(df_enriched, cluster_labels, features)
-    
-    # 9. Visualizza profili dei cluster
-    cluster_profiles = visualize_cluster_profiles(df_with_clusters, features, n_clusters)
-    
-    # 10. Definisci strategie di marketing
-    marketing_strategies = create_marketing_strategy(cluster_stats, df_with_clusters)
-    
-    return df_with_clusters, cluster_stats, marketing_strategies
+# Converti in DataFrame
+marketing_strategies_df = pd.DataFrame(marketing_strategies)
+print("\nStrategie di marketing generate:")
+print(marketing_strategies_df)
 
+print(f"Generazione strategie completata in {time.time() - start_time:.2f} secondi.")
 
-df_enriched = pd.read_excel('dataset_enriched.xlsx')
-df_with_clusters, cluster_stats, marketing_strategies = run_customer_clustering_pipeline(df_enriched)
-print(marketing_strategies)
+# OTTIMIZZAZIONE 8: Risultati applicati all'intero dataset (opzionale, solo se necessario)
+if len(df_sample) < len(df_enriched):
+    print("\nApplicazione dei risultati all'intero dataset...")
+    start_time = time.time()
+    
+    # Addestra un modello finale con i parametri ottimali
+    final_model = KMeans(
+        n_clusters=best_n_clusters, 
+        random_state=42, 
+        n_init=1,  # Usa una sola inizializzazione per velocità
+        max_iter=100,
+        algorithm='elkan'  # Generalmente più veloce per dataset di piccole/medie dimensioni
+    )
+    
+    # Prepara i dati completi
+    full_features = df_enriched[available_features].copy()
+    for col in full_features.columns:
+        if full_features[col].isnull().sum() > 0:
+            full_features[col].fillna(full_features[col].median(), inplace=True)
+    
+    full_scaled = scaler.transform(full_features)
+    
+    # Predici i cluster
+    full_labels = final_model.fit_predict(full_scaled)
+    
+    # Aggiungi al dataset completo
+    df_enriched['CLUSTER'] = full_labels
+    
+    # Mostra la distribuzione
+    full_counts = np.bincount(full_labels)
+    for i, count in enumerate(full_counts):
+        print(f"  - Cluster {i} (dataset completo): {count} elementi ({count/len(full_labels)*100:.1f}%)")
+    
+    print(f"Applicazione all'intero dataset completata in {time.time() - start_time:.2f} secondi.")
+
+# Salva il modello e i risultati principali
+print("\nSalvataggio dei risultati principali...")
+
+try:
+    # Salva le strategie di marketing
+    marketing_strategies_df.to_csv('marketing_strategies.csv', index=False)
+    print("Strategie di marketing salvate in 'marketing_strategies.csv'")
+    
+    # Salva statistiche cluster
+    if isinstance(cluster_stats, pd.DataFrame):
+        cluster_stats.to_csv('cluster_statistics.csv')
+        print("Statistiche dei cluster salvate in 'cluster_statistics.csv'")
+    
+    # Salva i risultati dell'analisi del numero ottimale di cluster
+    pd.DataFrame(results).to_csv('cluster_analysis_results.csv', index=False)
+    print("Risultati dell'analisi dei cluster salvati in 'cluster_analysis_results.csv'")
+    
+    # Salva il dataset con le etichette
+    df_with_clusters.to_csv('clustered_sample_data.csv', index=False)
+    print("Dataset con cluster salvato in 'clustered_sample_data.csv'")
+    
+    # Se è stato elaborato l'intero dataset
+    if 'CLUSTER' in df_enriched.columns:
+        # Salva solo le colonne essenziali e il cluster
+        save_cols = ['CLUSTER'] + [c for c in available_features if c in df_enriched.columns]
+        df_enriched[save_cols].to_csv('full_dataset_clusters.csv', index=False)
+        print("Dataset completo con cluster salvato in 'full_dataset_clusters.csv'")
+    
+except Exception as e:
+    print(f"Errore durante il salvataggio dei risultati: {e}")
+
+# Tempo totale
+total_runtime = time.time() - start_load
+print("\n" + "="*80)
+print(f"PIPELINE ACCELERATA COMPLETATA in {total_runtime:.2f} secondi ({total_runtime/60:.2f} minuti)")
+print("="*80)
+print(f"Script completato alle {time.strftime('%Y-%m-%d %H:%M:%S')}")
