@@ -12,7 +12,6 @@ import time
 print("Script di clustering ottimizzato avviato...")
 print(f"Ora di inizio: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-# Carica i dati
 print("\nCaricamento dataset da 'dataset_enriched.xlsx'...")
 start_load = time.time()
 df_enriched = pd.read_excel('dataset_enriched.xlsx')
@@ -21,7 +20,7 @@ print(f"Dataset caricato in {load_time:.2f} secondi. Shape: {df_enriched.shape}"
 
 # OTTIMIZZAZIONE 1: Selezione di un sottoinsieme di dati se il dataset è grande
 print("\nValutazione dimensione dataset...")
-sample_size = 5000  # Dimensione massima del campione
+sample_size = 5000
 if len(df_enriched) > sample_size:
     print(f"Dataset grande rilevato ({len(df_enriched)} righe). Campionamento di {sample_size} righe per analisi iniziale...")
     df_sample = df_enriched.sample(n=sample_size, random_state=42)
@@ -33,7 +32,6 @@ else:
 print("\nPreparazione dati con feature essenziali...")
 start_time = time.time()
 
-# Selezione di feature ridotte ma rappresentative
 essential_features = [
     'POLICYHOLDER_AGE',
     'CLAIM_AMOUNT_PAID',
@@ -45,14 +43,11 @@ essential_features = [
     'CUSTOMER_VALUE_INDEX'
 ]
 
-# Verifica quali feature sono effettivamente disponibili
 available_features = [f for f in essential_features if f in df_sample.columns]
 print(f"Utilizzando {len(available_features)}/{len(essential_features)} feature essenziali: {available_features}")
 
-# Prepara i dati
 df_features = df_sample[available_features].copy()
 
-# Gestione valori nulli veloce
 for col in df_features.columns:
     null_count = df_features[col].isnull().sum()
     if null_count > 0:
@@ -72,16 +67,14 @@ print(f"Preparazione dati completata in {time.time() - start_time:.2f} secondi."
 print("\nRicerca rapida del numero ottimale di cluster...")
 start_time = time.time()
 
-# MODIFICA: Testare più valori per il numero di cluster
 n_clusters_to_test = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 results = {'n_clusters': [], 'inertia': [], 'silhouette': []}
 
-# MODIFICA: Implementazione parallela per K-means
+# Implementazione parallela per K-means
 from joblib import Parallel, delayed
 
 def evaluate_kmeans(n, X):
     print(f"  - Testando {n} cluster...")
-    # Parametri più rilassati per velocizzare
     kmeans = KMeans(n_clusters=n, random_state=42, n_init=3, max_iter=100, tol=1e-3)
     kmeans.fit(X)
     
@@ -92,12 +85,11 @@ def evaluate_kmeans(n, X):
     return n, inertia, silhouette
 
 # Esegui in parallelo con un numero adeguato di jobs
-n_jobs = min(4, len(n_clusters_to_test))  # Limita a max 4 processi paralleli
+n_jobs = min(4, len(n_clusters_to_test))
 cluster_results = Parallel(n_jobs=n_jobs)(
     delayed(evaluate_kmeans)(n, df_scaled) for n in n_clusters_to_test
 )
 
-# Elabora i risultati
 for n, inertia, silhouette in cluster_results:
     results['n_clusters'].append(n)
     results['inertia'].append(inertia)
@@ -105,15 +97,14 @@ for n, inertia, silhouette in cluster_results:
 
 print(f"Ricerca completata in {time.time() - start_time:.2f} secondi.")
 
-# MODIFICA: Selezione più sofisticata del numero di cluster
 # Trova il miglior silhouette score
 best_silhouette_idx = np.argmax(results['silhouette'])
 best_n_clusters_silhouette = results['n_clusters'][best_silhouette_idx]
 best_silhouette = results['silhouette'][best_silhouette_idx]
 
-# Trova il punto di "gomito" dell'inertia (metodo del gomito)
+# Trova il punto di "gomito" dell'inertia
 from kneed import KneeLocator
-if len(results['n_clusters']) >= 4:  # Almeno 4 punti per trovare il gomito
+if len(results['n_clusters']) >= 4: 
     try:
         kneedle = KneeLocator(
             results['n_clusters'], 
@@ -128,7 +119,6 @@ if len(results['n_clusters']) >= 4:  # Almeno 4 punti per trovare il gomito
 else:
     elbow_point = None
 
-# Scegli il numero di cluster in base a entrambi i criteri
 if elbow_point and results['silhouette'][results['n_clusters'].index(elbow_point)] > 0.7 * best_silhouette:
     best_n_clusters = elbow_point
     print(f"\nNumero di cluster selezionato dal metodo del gomito: {best_n_clusters}")
@@ -137,7 +127,6 @@ else:
     best_n_clusters = best_n_clusters_silhouette
     print(f"\nMiglior numero di cluster selezionato dal silhouette score: {best_n_clusters} (silhouette: {best_silhouette:.4f})")
 
-# Visualizzazione rapida dei risultati
 plt.figure(figsize=(12, 5))
 plt.subplot(1, 2, 1)
 plt.plot(results['n_clusters'], results['inertia'], 'o-')
@@ -161,18 +150,16 @@ print("Grafico di selezione dei cluster salvato in 'cluster_selection.png'")
 print(f"\nEseguendo K-means veloce con {best_n_clusters} cluster...")
 start_time = time.time()
 
-# MODIFICA: Equilibrio tra velocità e precisione
 kmeans = KMeans(
     n_clusters=best_n_clusters, 
     random_state=42, 
-    n_init=5,  # Aumentato leggermente per migliore stabilità con più cluster
-    max_iter=150,  # Aumentato per consentire una migliore convergenza con più cluster
-    tol=1e-3,  # Tolleranza più elevata per convergenza più rapida
-    algorithm='elkan'  # Generalmente più veloce per dataset di piccole/medie dimensioni
+    n_init=5, 
+    max_iter=150,
+    tol=1e-3,
+    algorithm='elkan' 
 )
 cluster_labels = kmeans.fit_predict(df_scaled)
 
-# Distribuzione dei cluster
 counts = np.bincount(cluster_labels)
 for i, count in enumerate(counts):
     print(f"  - Cluster {i}: {count} elementi ({count/len(cluster_labels)*100:.1f}%)")
@@ -192,14 +179,12 @@ pca_df = pd.DataFrame(
 )
 pca_df['Cluster'] = cluster_labels
 
-# Stampa la varianza spiegata
 var_explained = pca.explained_variance_ratio_
 print(f"  - Varianza spiegata: PC1={var_explained[0]:.2%}, PC2={var_explained[1]:.2%}")
 print(f"  - Varianza totale spiegata: {sum(var_explained):.2%}")
 
 print(f"PCA completata in {time.time() - start_time:.2f} secondi.")
 
-# MODIFICA: Visualizzazione migliorata dei cluster
 plt.figure(figsize=(12, 10))
 scatter = plt.scatter(
     pca_df['PC1'], 
@@ -222,16 +207,13 @@ print("Visualizzazione dei cluster salvata in 'cluster_visualization.png'")
 print("\nCalcolo statistiche essenziali per cluster...")
 start_time = time.time()
 
-# Aggiungi le etichette al dataset originale
 df_with_clusters = df_sample.copy()
 df_with_clusters['CLUSTER'] = cluster_labels
 
-# MODIFICA: Ampliato il set di metriche analizzate
 key_metrics = ['POLICYHOLDER_AGE', 'COMBINED_RISK_INDEX', 'CUSTOMER_VALUE_INDEX', 
                'CLAIM_AMOUNT_PAID', 'PREMIUM_AMOUNT_PAID', 'CUSTOMER_TENURE_YEARS']
 available_metrics = [m for m in key_metrics if m in df_with_clusters.columns]
 
-# Calcola statistiche per ogni cluster
 if available_metrics:
     cluster_stats = df_with_clusters.groupby('CLUSTER')[available_metrics].agg(['mean', 'median', 'std', 'min', 'max'])
     print("\nStatistiche dei cluster:")
@@ -245,18 +227,15 @@ print(f"Analisi cluster completata in {time.time() - start_time:.2f} secondi.")
 print("\nGenerazione rapida delle strategie di marketing...")
 start_time = time.time()
 
-# Creare strategie semplici basate sui cluster
 marketing_strategies = []
 
 for cluster_id in range(best_n_clusters):
     cluster_df = df_with_clusters[df_with_clusters['CLUSTER'] == cluster_id]
     
-    # Calcola caratteristiche chiave
     profile = {}
     for metric in available_metrics:
         profile[metric] = cluster_df[metric].mean()
     
-    # Determina il tipo di cluster in base ai valori
     strategy = {
         'Cluster': f'Cluster {cluster_id}',
         'Size': len(cluster_df),
@@ -267,7 +246,6 @@ for cluster_id in range(best_n_clusters):
         'Communication_Channel': ''
     }
     
-    # Logica per la caratterizzazione
     if 'POLICYHOLDER_AGE' in profile:
         age = profile['POLICYHOLDER_AGE']
         if age < 30:
@@ -313,7 +291,6 @@ for cluster_id in range(best_n_clusters):
     else:
         value_profile = "valore vario"
     
-    # MODIFICA: Aggiungi informazioni su fedeltà/retention
     if 'CUSTOMER_TENURE_YEARS' in profile:
         tenure = profile['CUSTOMER_TENURE_YEARS']
         if tenure < 1:
@@ -327,14 +304,12 @@ for cluster_id in range(best_n_clusters):
     else:
         tenure_profile = ""
     
-    # Imposta il profilo
     if tenure_profile:
         strategy['Profile'] = f"Clienti {age_profile}, {risk_profile}, {value_profile}, {tenure_profile}"
     else:
         strategy['Profile'] = f"Clienti {age_profile}, {risk_profile}, {value_profile}"
     
-    # MODIFICA: Strategia più granulare basata sui profili identificati
-    # Matrice di decisione semplificata
+    # Matrice di decisione
     if "basso rischio" in risk_profile and "alto valore" in value_profile:
         strategy['Marketing_Strategy'] = "Premium loyalty program"
         strategy['Product_Recommendations'] = "Premium add-ons, family protection plan"
@@ -378,28 +353,25 @@ for cluster_id in range(best_n_clusters):
     
     marketing_strategies.append(strategy)
 
-# Converti in DataFrame
 marketing_strategies_df = pd.DataFrame(marketing_strategies)
 print("\nStrategie di marketing generate:")
 print(marketing_strategies_df)
 
 print(f"Generazione strategie completata in {time.time() - start_time:.2f} secondi.")
 
-# OTTIMIZZAZIONE 8: Risultati applicati all'intero dataset (opzionale, solo se necessario)
+# OTTIMIZZAZIONE 8: Risultati applicati all'intero dataset
 if len(df_sample) < len(df_enriched):
     print("\nApplicazione dei risultati all'intero dataset...")
     start_time = time.time()
     
-    # Addestra un modello finale con i parametri ottimali
     final_model = KMeans(
         n_clusters=best_n_clusters, 
         random_state=42, 
-        n_init=1,  # Usa una sola inizializzazione per velocità
+        n_init=1, 
         max_iter=100,
-        algorithm='elkan'  # Generalmente più veloce per dataset di piccole/medie dimensioni
+        algorithm='elkan' 
     )
     
-    # Prepara i dati completi
     full_features = df_enriched[available_features].copy()
     for col in full_features.columns:
         if full_features[col].isnull().sum() > 0:
@@ -407,53 +379,36 @@ if len(df_sample) < len(df_enriched):
     
     full_scaled = scaler.transform(full_features)
     
-    # Predici i cluster
     full_labels = final_model.fit_predict(full_scaled)
     
-    # Aggiungi al dataset completo
     df_enriched['CLUSTER'] = full_labels
     
-    # Mostra la distribuzione
     full_counts = np.bincount(full_labels)
     for i, count in enumerate(full_counts):
         print(f"  - Cluster {i} (dataset completo): {count} elementi ({count/len(full_labels)*100:.1f}%)")
     
     print(f"Applicazione all'intero dataset completata in {time.time() - start_time:.2f} secondi.")
 
-# Salva il modello e i risultati principali
 print("\nSalvataggio dei risultati principali...")
 
 try:
-    # Salva le strategie di marketing
     marketing_strategies_df.to_csv('marketing_strategies.csv', index=False)
     print("Strategie di marketing salvate in 'marketing_strategies.csv'")
     
-    # Salva statistiche cluster
     if isinstance(cluster_stats, pd.DataFrame):
         cluster_stats.to_csv('cluster_statistics.csv')
         print("Statistiche dei cluster salvate in 'cluster_statistics.csv'")
     
-    # Salva i risultati dell'analisi del numero ottimale di cluster
     pd.DataFrame(results).to_csv('cluster_analysis_results.csv', index=False)
     print("Risultati dell'analisi dei cluster salvati in 'cluster_analysis_results.csv'")
     
-    # Salva il dataset con le etichette
     df_with_clusters.to_csv('clustered_sample_data.csv', index=False)
     print("Dataset con cluster salvato in 'clustered_sample_data.csv'")
     
-    # Se è stato elaborato l'intero dataset
     if 'CLUSTER' in df_enriched.columns:
-        # Salva solo le colonne essenziali e il cluster
         save_cols = ['CLUSTER'] + [c for c in available_features if c in df_enriched.columns]
         df_enriched[save_cols].to_csv('full_dataset_clusters.csv', index=False)
         print("Dataset completo con cluster salvato in 'full_dataset_clusters.csv'")
     
 except Exception as e:
     print(f"Errore durante il salvataggio dei risultati: {e}")
-
-# Tempo totale
-total_runtime = time.time() - start_load
-print("\n" + "="*80)
-print(f"PIPELINE ACCELERATA COMPLETATA in {total_runtime:.2f} secondi ({total_runtime/60:.2f} minuti)")
-print("="*80)
-print(f"Script completato alle {time.strftime('%Y-%m-%d %H:%M:%S')}")
