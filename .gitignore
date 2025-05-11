@@ -2,3 +2,5 @@ myenv
 *.xlsx
 *.csv
 *.png
+kpi_report.txt
+*.pkl
