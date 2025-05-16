@@ -2,6 +2,7 @@
 
 ## BEST Hackathon 2025 - Team 11 Solution
 
+
 <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python Version">
 <img src="https://img.shields.io/badge/Status-Completed-success.svg" alt="Status">
 
@@ -95,6 +96,9 @@ Our analysis revealed clear behavior and value patterns that justify differentia
 - Explore predictive modeling to anticipate churn or cross-selling potential
 - Prototype real-time recommendation systems
 - Test dynamic pricing models linked to combined risk-value indicators
+
+## Result 🏆
+🏅Top 3 
 
 ---
 
